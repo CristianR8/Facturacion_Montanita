@@ -429,7 +429,8 @@ function App() {
               </div>
               <div className="max-w-3xl">
               <h1 className="font-display text-4xl leading-tight md:text-5xl">
-                Generacion de Facturas: La Montanita
+                <span className="block">Generacion de Facturas</span>
+                <span className="block">La Montañita</span>
               </h1>
               </div>
             </div>
