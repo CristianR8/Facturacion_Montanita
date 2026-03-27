@@ -252,7 +252,6 @@ function buildThermalReceipt(invoice, companyProfile) {
 
   lines.push(divider);
   lines.push(...formatReceiptPair("Subtotal", formatMoney(invoice.subtotal, companyProfile.currency)));
-  lines.push(...formatReceiptPair("IVA", formatMoney(invoice.tax, companyProfile.currency)));
   lines.push(totalDivider);
   lines.push(...formatReceiptPair("TOTAL", formatMoney(invoice.total, companyProfile.currency)));
   lines.push(totalDivider);

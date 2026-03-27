@@ -176,8 +176,8 @@ function App() {
       (sum, item) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0),
       0
     );
-    const tax = Math.round(subtotal * 0.19);
-    const total = subtotal + tax;
+    const tax = 0;
+    const total = subtotal;
 
     return {
       ...invoice,
@@ -284,8 +284,8 @@ function App() {
       (sum, item) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0),
       0
     );
-    const tax = Math.round(subtotal * 0.19);
-    const total = subtotal + tax;
+    const tax = 0;
+    const total = subtotal;
 
     return {
       ...normalizedInvoice,
@@ -572,7 +572,6 @@ function App() {
               <div className="mt-6 flex flex-col gap-4 rounded-[24px] bg-ink px-5 py-4 text-brand-50 md:flex-row md:items-center md:justify-between">
                 <div className="grid gap-2 text-sm">
                   <span>Subtotal: {money(computedInvoice.subtotal, companyProfile.currency || "COP")}</span>
-                  <span>Impuesto (IVA 19%): {money(computedInvoice.tax, companyProfile.currency || "COP")}</span>
                   <strong className="text-xl">Total: {money(computedInvoice.total, companyProfile.currency || "COP")}</strong>
                 </div>
                 <div className="flex flex-wrap gap-3">

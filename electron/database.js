@@ -7,8 +7,8 @@ const demoInvoices = [
     customerDocument: "CC 10101010",
     createdAt: new Date().toISOString(),
     subtotal: 32500,
-    tax: 6175,
-    total: 38675,
+    tax: 0,
+    total: 32500,
     status: "Impresa",
     items: [
       { description: "Cafe artesanal", quantity: 1, unitPrice: 18500, weightGrams: 500 },
@@ -21,8 +21,8 @@ const demoInvoices = [
     customerDocument: "NIT 900123456",
     createdAt: new Date(Date.now() - 86_400_000).toISOString(),
     subtotal: 54000,
-    tax: 10260,
-    total: 64260,
+    tax: 0,
+    total: 54000,
     status: "Impresa",
     items: [
       { description: "Paquete de cacao organico", quantity: 2, unitPrice: 12000 },
@@ -338,6 +338,9 @@ async function createInvoice(invoice) {
   const currentPool = getPool();
 
   const client = await currentPool.connect();
+  const normalizedSubtotal = Number(invoice.subtotal) || 0;
+  const normalizedTax = 0;
+  const normalizedTotal = normalizedSubtotal;
 
   try {
     await client.query("BEGIN");
@@ -359,9 +362,9 @@ async function createInvoice(invoice) {
         invoice.paymentMethod,
         invoice.notes,
         invoice.status,
-        invoice.subtotal,
-        invoice.tax,
-        invoice.total
+        normalizedSubtotal,
+        normalizedTax,
+        normalizedTotal
       ]
     );
 
@@ -391,6 +394,9 @@ async function createInvoice(invoice) {
 
   return {
     ...invoice,
+    subtotal: normalizedSubtotal,
+    tax: normalizedTax,
+    total: normalizedTotal,
     createdAt: new Date().toISOString()
   };
 }
