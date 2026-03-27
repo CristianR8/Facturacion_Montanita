@@ -11,7 +11,13 @@ const demoInvoices = [
     total: 32500,
     status: "Impresa",
     items: [
-      { description: "Cafe artesanal", quantity: 1, unitPrice: 18500, weightGrams: 500 },
+      {
+        description: "Cafe artesanal",
+        quantity: 1,
+        unitPrice: 37,
+        weightGrams: 500,
+        priceByWeight: true
+      },
       { description: "Frasco de miel de montana", quantity: 1, unitPrice: 14000 }
     ]
   },
@@ -134,13 +140,19 @@ async function ensureSchema() {
       description TEXT NOT NULL,
       quantity INTEGER NOT NULL,
       unit_price NUMERIC(12, 2) NOT NULL,
-      weight_grams INTEGER
+      weight_grams INTEGER,
+      price_by_weight BOOLEAN NOT NULL DEFAULT FALSE
     );
   `);
 
   await currentPool.query(`
     ALTER TABLE invoice_items
     ADD COLUMN IF NOT EXISTS weight_grams INTEGER;
+  `);
+
+  await currentPool.query(`
+    ALTER TABLE invoice_items
+    ADD COLUMN IF NOT EXISTS price_by_weight BOOLEAN NOT NULL DEFAULT FALSE;
   `);
 
   await currentPool.query(`
@@ -232,7 +244,8 @@ function mapInvoiceRow(invoiceRow, items) {
       description: item.description,
       quantity: Number(item.quantity),
       unitPrice: Number(item.unit_price),
-      weightGrams: item.weight_grams == null ? undefined : Number(item.weight_grams)
+      weightGrams: item.weight_grams == null ? undefined : Number(item.weight_grams),
+      priceByWeight: Boolean(item.price_by_weight)
     }))
   };
 }
@@ -247,7 +260,7 @@ async function listInvoices() {
   const invoices = await Promise.all(
     rows.map(async (row) => {
       const itemRows = await currentPool.query(
-        "SELECT description, quantity, unit_price, weight_grams FROM invoice_items WHERE invoice_id = $1 ORDER BY id ASC",
+        "SELECT description, quantity, unit_price, weight_grams, price_by_weight FROM invoice_items WHERE invoice_id = $1 ORDER BY id ASC",
         [row.id]
       );
 
@@ -371,15 +384,16 @@ async function createInvoice(invoice) {
     for (const item of invoice.items) {
       await client.query(
         `
-          INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, weight_grams)
-          VALUES ($1, $2, $3, $4, $5)
+          INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, weight_grams, price_by_weight)
+          VALUES ($1, $2, $3, $4, $5, $6)
         `,
         [
           invoice.id,
           item.description,
           item.quantity,
           item.unitPrice,
-          normalizeWeightGrams(item.weightGrams)
+          normalizeWeightGrams(item.weightGrams),
+          Boolean(item.priceByWeight)
         ]
       );
     }

@@ -5,6 +5,7 @@ type InvoiceItem = {
   quantity: number;
   unitPrice: number;
   weightGrams?: number;
+  priceByWeight?: boolean;
 };
 
 type InvoiceRecord = {

@@ -119,6 +119,32 @@ function money(value: number, currency: string) {
   }).format(value || 0);
 }
 
+function toSafeNumber(value: number | string | undefined) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : 0;
+}
+
+function calculateItemTotal(item: InvoiceItem) {
+  const quantity = toSafeNumber(item.quantity);
+  const unitPrice = toSafeNumber(item.unitPrice);
+
+  if (item.priceByWeight) {
+    return quantity * unitPrice * toSafeNumber(item.weightGrams);
+  }
+
+  return quantity * unitPrice;
+}
+
+function normalizeInvoiceItem(item: InvoiceItem): InvoiceItem {
+  return {
+    description: String(item.description || ""),
+    quantity: toSafeNumber(item.quantity),
+    unitPrice: toSafeNumber(item.unitPrice),
+    weightGrams: item.weightGrams == null ? undefined : toSafeNumber(item.weightGrams),
+    priceByWeight: Boolean(item.priceByWeight)
+  };
+}
+
 function App() {
   const [mode, setMode] = useState<"demo" | "postgres">("postgres");
   const [loading, setLoading] = useState(true);
@@ -172,10 +198,7 @@ function App() {
   }, []);
 
   const computedInvoice = useMemo(() => {
-    const subtotal = invoice.items.reduce(
-      (sum, item) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0),
-      0
-    );
+    const subtotal = invoice.items.reduce((sum, item) => sum + calculateItemTotal(item), 0);
     const tax = 0;
     const total = subtotal;
 
@@ -219,11 +242,7 @@ function App() {
     }));
   }
 
-  function updateItem(
-    index: number,
-    key: keyof InvoiceItem,
-    value: string | number | undefined
-  ) {
+  function updateItem<K extends keyof InvoiceItem>(index: number, key: K, value: InvoiceItem[K]) {
     setInvoice((current) => ({
       ...current,
       items: current.items.map((item, itemIndex) =>
@@ -235,7 +254,10 @@ function App() {
   function addItem() {
     setInvoice((current) => ({
       ...current,
-      items: [...current.items, { description: "", quantity: 1, unitPrice: 0 }]
+      items: [
+        ...current.items,
+        { description: "", quantity: 1, unitPrice: 0, weightGrams: undefined, priceByWeight: false }
+      ]
     }));
   }
 
@@ -271,19 +293,30 @@ function App() {
       return null;
     }
 
-    const items = computedInvoice.items.filter(
-      (item) => item.description.trim() !== "" && Number(item.quantity) > 0
-    );
+    const items = invoice.items
+      .map((item) => ({
+        ...normalizeInvoiceItem(item),
+        description: String(item.description || "").trim()
+      }))
+      .filter((item) => item.description !== "" && item.quantity > 0);
 
     if (items.length === 0) {
       setStatusMessage("Agrega al menos un producto valido antes de guardar o imprimir.");
       return null;
     }
 
-    const subtotal = items.reduce(
-      (sum, item) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0),
-      0
+    const itemMissingWeight = items.find(
+      (item) => item.priceByWeight && toSafeNumber(item.weightGrams) <= 0
     );
+
+    if (itemMissingWeight) {
+      setStatusMessage(
+        `Ingresa el peso en gramos para "${itemMissingWeight.description}" antes de guardar o imprimir.`
+      );
+      return null;
+    }
+
+    const subtotal = items.reduce((sum, item) => sum + calculateItemTotal(item), 0);
     const tax = 0;
     const total = subtotal;
 
@@ -404,6 +437,8 @@ function App() {
     };
   }, [savedInvoices]);
 
+  const activeCurrency = companyProfile.currency || "COP";
+
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-brand-50 font-body text-ink">
@@ -440,7 +475,7 @@ function App() {
               <MetricCard
                 icon={<BadgeDollarSign size={18} />}
                 label="Ingresos"
-                value={money(stats.revenue, companyProfile.currency || "COP")}
+                value={money(stats.revenue, activeCurrency)}
               />
             </div>
           </div>
@@ -450,8 +485,8 @@ function App() {
           {statusMessage}
         </div>
 
-        <div className="grid items-start gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-          <section className="grid gap-6">
+        <div className="grid items-start gap-6 xl:grid-cols-3">
+          <section className="grid gap-6 xl:col-span-2">
             <div className="rounded-[28px] border border-brand-200 bg-white p-6 shadow-soft">
               <SectionHeader
                 icon={<ShoppingBasket size={18} />}
@@ -520,59 +555,129 @@ function App() {
                       No hay productos agregados todavia.
                     </div>
                   ) : (
-                    invoice.items.map((item, index) => (
-                      <div
-                        className="grid gap-3 rounded-2xl border border-brand-100 bg-white p-3 md:grid-cols-[1.6fr_0.55fr_0.75fr_0.75fr_auto]"
-                        key={index}
-                      >
-                        <Field
-                          label="Descripcion"
-                          value={item.description}
-                          onChange={(value) => updateItem(index, "description", value)}
-                        />
-                        <Field
-                          label="Cant."
-                          type="number"
-                          value={String(item.quantity)}
-                          onChange={(value) => updateItem(index, "quantity", Number(value))}
-                        />
-                        <Field
-                          label="Precio unitario"
-                          type="number"
-                          value={String(item.unitPrice)}
-                          onChange={(value) => updateItem(index, "unitPrice", Number(value))}
-                        />
-                        <Field
-                          label="Peso (g)"
-                          placeholder="Opcional"
-                          type="number"
-                          value={item.weightGrams ? String(item.weightGrams) : ""}
-                          onChange={(value) =>
-                            updateItem(
-                              index,
-                              "weightGrams",
-                              value.trim() === "" ? undefined : Number(value)
-                            )
-                          }
-                        />
-                        <button
-                          className="inline-flex items-center justify-center gap-2 self-end rounded-full border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700 transition hover:bg-red-100"
-                          onClick={() => removeItem(index)}
-                          type="button"
-                        >
-                          <Trash2 size={14} />
-                          Eliminar
-                        </button>
-                      </div>
-                    ))
+                    <div className="space-y-3">
+                        <div className="grid grid-cols-[minmax(0,1.85fr)_minmax(0,0.7fr)_minmax(0,1.2fr)_minmax(0,1.05fr)_minmax(0,1.1fr)_minmax(0,0.95fr)_44px] gap-2 px-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-500">
+                          <span>Producto</span>
+                          <span className="text-center">Cant.</span>
+                          <span>Precio</span>
+                          <span>Peso (g)</span>
+                          <span>Calculo</span>
+                          <span className="text-right">Total</span>
+                          <span className="sr-only">Eliminar</span>
+                        </div>
+
+                        {invoice.items.map((item, index) => {
+                          const itemTotal = calculateItemTotal(item);
+
+                          return (
+                            <div
+                              className="grid grid-cols-[minmax(0,1.85fr)_minmax(0,0.7fr)_minmax(0,1.2fr)_minmax(0,1.05fr)_minmax(0,1.1fr)_minmax(0,0.95fr)_44px] items-center gap-2 rounded-[22px] border border-brand-100 bg-white p-2.5 shadow-[0_12px_35px_rgba(36,82,63,0.06)]"
+                              key={index}
+                            >
+                              <label className="sr-only" htmlFor={`item-description-${index}`}>
+                                Descripcion
+                              </label>
+                              <input
+                                className="h-11 min-w-0 w-full rounded-2xl border border-brand-200 bg-white px-3 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-200"
+                                id={`item-description-${index}`}
+                                onChange={(event) => updateItem(index, "description", event.target.value)}
+                                placeholder="Nombre del producto"
+                                value={item.description}
+                              />
+
+                              <label className="sr-only" htmlFor={`item-quantity-${index}`}>
+                                Cantidad
+                              </label>
+                              <input
+                                className="h-11 min-w-0 w-full rounded-2xl border border-brand-200 bg-white px-3 text-center text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-200"
+                                id={`item-quantity-${index}`}
+                                min="0"
+                                onChange={(event) => updateItem(index, "quantity", Number(event.target.value))}
+                                type="number"
+                                value={String(item.quantity)}
+                              />
+
+                              <label className="sr-only" htmlFor={`item-price-${index}`}>
+                                {item.priceByWeight ? "Precio por gramo" : "Precio unitario"}
+                              </label>
+                              <div className="flex h-11 min-w-0 items-center rounded-2xl border border-brand-200 bg-white px-3 transition focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-200">
+                                <span className="mr-2 inline-flex min-w-[40px] justify-center rounded-full bg-brand-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-800">
+                                  {item.priceByWeight ? "g" : "und"}
+                                </span>
+                                <input
+                                  className="min-w-0 w-full border-0 bg-transparent p-0 text-sm outline-none"
+                                  id={`item-price-${index}`}
+                                  min="0"
+                                  onChange={(event) => updateItem(index, "unitPrice", Number(event.target.value))}
+                                  placeholder={item.priceByWeight ? "Precio por gramo" : "Precio unitario"}
+                                  type="number"
+                                  value={String(item.unitPrice)}
+                                />
+                              </div>
+
+                              <label className="sr-only" htmlFor={`item-weight-${index}`}>
+                                Peso en gramos
+                              </label>
+                              <input
+                                className="h-11 min-w-0 w-full rounded-2xl border border-brand-200 bg-white px-3 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-200"
+                                id={`item-weight-${index}`}
+                                min="0"
+                                onChange={(event) =>
+                                  updateItem(
+                                    index,
+                                    "weightGrams",
+                                    event.target.value.trim() === "" ? undefined : Number(event.target.value)
+                                  )
+                                }
+                                placeholder="Peso total"
+                                type="number"
+                                value={item.weightGrams != null ? String(item.weightGrams) : ""}
+                              />
+
+                              <label
+                                className={`inline-flex h-11 min-w-0 items-center justify-center gap-2 rounded-2xl border px-2.5 text-sm font-medium transition ${
+                                  item.priceByWeight
+                                    ? "border-brand-400 bg-brand-100 text-brand-900 shadow-sm"
+                                    : "border-brand-200 bg-brand-50/40 text-stone-600 hover:border-brand-300 hover:bg-brand-50"
+                                }`}
+                              >
+                                <input
+                                  checked={Boolean(item.priceByWeight)}
+                                  className="h-4 w-4 accent-[#24523f]"
+                                  onChange={(event) =>
+                                    updateItem(index, "priceByWeight", event.target.checked)
+                                  }
+                                  type="checkbox"
+                                />
+                                Por peso
+                              </label>
+
+                              <div className="flex h-11 min-w-0 items-center justify-end rounded-2xl bg-gradient-to-r from-[#24523f] to-[#163327] px-3 text-sm font-semibold text-white shadow-inner">
+                                {money(itemTotal, activeCurrency)}
+                              </div>
+
+                              <button
+                                aria-label={`Eliminar ${item.description || `producto ${index + 1}`}`}
+                                className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-red-200 bg-red-50 text-red-700 transition hover:bg-red-100"
+                                onClick={() => removeItem(index)}
+                                title="Eliminar producto"
+                                type="button"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          );
+                        })}
+                    </div>
                   )}
                 </div>
+
               </div>
 
               <div className="mt-6 flex flex-col gap-4 rounded-[24px] bg-ink px-5 py-4 text-brand-50 md:flex-row md:items-center md:justify-between">
                 <div className="grid gap-2 text-sm">
-                  <span>Subtotal: {money(computedInvoice.subtotal, companyProfile.currency || "COP")}</span>
-                  <strong className="text-xl">Total: {money(computedInvoice.total, companyProfile.currency || "COP")}</strong>
+                  <span>Subtotal: {money(computedInvoice.subtotal, activeCurrency)}</span>
+                  <strong className="text-xl">Total: {money(computedInvoice.total, activeCurrency)}</strong>
                 </div>
                 <div className="flex flex-wrap gap-3">
                   <ActionButton
@@ -618,7 +723,7 @@ function App() {
                       <p className="break-words">
                         {entry.items.map((item) => `${item.quantity} x ${item.description}`).join(", ")}
                       </p>
-                      <p>{money(entry.total, companyProfile.currency || "COP")}</p>
+                      <p>{money(entry.total, activeCurrency)}</p>
                     </div>
                     <div className="self-center rounded-full bg-brand-100 px-3 py-1 text-center text-sm text-brand-800">
                       {entry.status}
@@ -638,7 +743,7 @@ function App() {
             </div>
           </section>
 
-          <section className="grid gap-6">
+          <section className="grid gap-6 xl:col-span-1">
             <div className="rounded-[28px] border border-brand-200 bg-white p-6 shadow-soft">
               <SectionHeader
                 icon={<Building2 size={18} />}

@@ -33,6 +33,33 @@ function formatMoney(value, currency) {
   }).format(value);
 }
 
+function formatReceiptFactor(value) {
+  return new Intl.NumberFormat("es-CO", {
+    maximumFractionDigits: 2
+  }).format(Number(value) || 0);
+}
+
+function calculateItemTotal(item) {
+  const quantity = Number(item.quantity) || 0;
+  const unitPrice = Number(item.unitPrice) || 0;
+  const weightGrams = Number(item.weightGrams) || 0;
+
+  if (item.priceByWeight) {
+    return quantity * unitPrice * weightGrams;
+  }
+
+  return quantity * unitPrice;
+}
+
+function formatReceiptItemPricing(item, currency) {
+  if (item.priceByWeight) {
+    const calculatedUnitTotal = (Number(item.weightGrams) || 0) * (Number(item.unitPrice) || 0);
+    return `${formatReceiptFactor(item.quantity)} x ${formatReceiptFactor(calculatedUnitTotal)}`;
+  }
+
+  return `${item.quantity} x ${formatMoney(item.unitPrice, currency)}`;
+}
+
 function normalizePrinterName(value) {
   return String(value || "")
     .normalize("NFD")
@@ -239,8 +266,8 @@ function buildThermalReceipt(invoice, companyProfile) {
     }
     lines.push(
       ...formatReceiptPair(
-        `${item.quantity} x ${formatMoney(item.unitPrice, companyProfile.currency)}`,
-        formatMoney(item.quantity * item.unitPrice, companyProfile.currency)
+        formatReceiptItemPricing(item, companyProfile.currency),
+        formatMoney(calculateItemTotal(item), companyProfile.currency)
       )
     );
     lines.push("");
