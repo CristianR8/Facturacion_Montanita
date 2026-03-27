@@ -5,5 +5,6 @@ contextBridge.exposeInMainWorld("invoiceApp", {
   saveInvoice: (payload) => ipcRenderer.invoke("invoice:save", payload),
   deleteInvoice: (invoiceId) => ipcRenderer.invoke("invoice:delete", invoiceId),
   saveCompanyProfile: (payload) => ipcRenderer.invoke("company:save", payload),
+  previewInvoice: (payload) => ipcRenderer.invoke("invoice:preview", payload),
   printInvoice: (payload) => ipcRenderer.invoke("invoice:print", payload)
 });

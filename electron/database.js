@@ -33,17 +33,42 @@ const demoInvoices = [
 
 const demoCompanyProfile = {
   businessName: "La Montanita",
-  taxId: "NIT 901.555.222-7",
-  address: "Av. de las Flores 145, Bogota",
-  phone: "+57 300 123 4567",
-  email: "facturacion@lamontanita.com",
+  address: "Bucaramanga, Santander",
+  phone: "+57 3152837667",
   logoUrl: "logo.jpg",
   footerMessage: "Gracias por su compra. Regrese pronto.",
-  printerName: "Impresora termica principal",
+  printerName: "IMPRESORA LA MONTAÑITA",
   currency: "COP"
 };
 
 let pool;
+
+const configuredThermalPrinterName = "POS-80";
+
+function normalizePrinterKey(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/gi, " ")
+    .trim()
+    .toUpperCase();
+}
+
+function resolveConfiguredPrinterName(value) {
+  const candidate = String(value || "").trim();
+  const candidateKey = normalizePrinterKey(candidate);
+
+  if (
+    !candidateKey ||
+    candidateKey.startsWith("IMPRESORA LA MONTA") ||
+    candidateKey === "POS 58" ||
+    candidateKey === "POS58"
+  ) {
+    return configuredThermalPrinterName;
+  }
+
+  return candidate;
+}
 
 function getPool() {
   if (pool) {
@@ -90,6 +115,7 @@ async function ensureSchema() {
       id TEXT PRIMARY KEY,
       customer_name TEXT NOT NULL,
       customer_document TEXT NOT NULL,
+      customer_phone TEXT NOT NULL DEFAULT '',
       customer_email TEXT NOT NULL,
       payment_method TEXT NOT NULL,
       notes TEXT NOT NULL,
@@ -117,6 +143,11 @@ async function ensureSchema() {
     ADD COLUMN IF NOT EXISTS weight_grams INTEGER;
   `);
 
+  await currentPool.query(`
+    ALTER TABLE invoices
+    ADD COLUMN IF NOT EXISTS customer_phone TEXT NOT NULL DEFAULT '';
+  `);
+
   await currentPool.query(
     `
       INSERT INTO company_profile (
@@ -127,10 +158,10 @@ async function ensureSchema() {
     `,
     [
       demoCompanyProfile.businessName,
-      demoCompanyProfile.taxId,
+      "",
       demoCompanyProfile.address,
       demoCompanyProfile.phone,
-      demoCompanyProfile.email,
+      "",
       demoCompanyProfile.logoUrl,
       demoCompanyProfile.footerMessage,
       demoCompanyProfile.printerName,
@@ -138,14 +169,57 @@ async function ensureSchema() {
     ]
   );
 
+  await currentPool.query(
+    `
+      UPDATE company_profile
+      SET printer_name = $1, updated_at = NOW()
+      WHERE id = 1
+        AND (
+          COALESCE(NULLIF(BTRIM(printer_name), ''), '') = ''
+          OR printer_name ILIKE 'IMPRESORA LA MONTA%'
+          OR printer_name ILIKE 'POS-58'
+          OR printer_name ILIKE 'POS58'
+        );
+    `,
+    [configuredThermalPrinterName]
+  );
+
+  await currentPool.query(
+    `
+      UPDATE company_profile
+      SET address = $1, updated_at = NOW()
+      WHERE id = 1
+        AND BTRIM(address) = 'Av. de las Flores 145, Bogota';
+    `,
+    [demoCompanyProfile.address]
+  );
+
+  await currentPool.query(
+    `
+      UPDATE company_profile
+      SET phone = $1, updated_at = NOW()
+      WHERE id = 1
+        AND BTRIM(phone) = '+57 300 123 4567';
+    `,
+    [demoCompanyProfile.phone]
+  );
+
   return { mode: "postgres" };
 }
 
 function mapInvoiceRow(invoiceRow, items) {
+  const createdAt =
+    invoiceRow.created_at instanceof Date
+      ? invoiceRow.created_at.toISOString()
+      : invoiceRow.created_at
+        ? String(invoiceRow.created_at)
+        : undefined;
+
   return {
     id: invoiceRow.id,
     customerName: invoiceRow.customer_name,
     customerDocument: invoiceRow.customer_document,
+    customerPhone: invoiceRow.customer_phone || "",
     customerEmail: invoiceRow.customer_email,
     paymentMethod: invoiceRow.payment_method,
     notes: invoiceRow.notes,
@@ -153,7 +227,7 @@ function mapInvoiceRow(invoiceRow, items) {
     subtotal: Number(invoiceRow.subtotal),
     tax: Number(invoiceRow.tax),
     total: Number(invoiceRow.total),
-    createdAt: invoiceRow.created_at,
+    createdAt,
     items: items.map((item) => ({
       description: item.description,
       quantity: Number(item.quantity),
@@ -199,13 +273,11 @@ async function getCompanyProfile() {
 
   return {
     businessName: row.business_name,
-    taxId: row.tax_id,
     address: row.address,
     phone: row.phone,
-    email: row.email,
     logoUrl: row.logo_url,
     footerMessage: row.footer_message,
-    printerName: row.printer_name,
+    printerName: resolveConfiguredPrinterName(row.printer_name),
     currency: row.currency
   };
 }
@@ -234,13 +306,13 @@ async function saveCompanyProfile(profile) {
     `,
     [
       profile.businessName,
-      profile.taxId,
+      String(profile.taxId || ""),
       profile.address,
       profile.phone,
-      profile.email,
+      String(profile.email || ""),
       profile.logoUrl,
       profile.footerMessage,
-      profile.printerName,
+      resolveConfiguredPrinterName(profile.printerName),
       profile.currency
     ]
   );
@@ -273,16 +345,17 @@ async function createInvoice(invoice) {
     await client.query(
       `
         INSERT INTO invoices (
-          id, customer_name, customer_document, customer_email, payment_method, notes, status,
-          subtotal, tax, total, created_at
+          id, customer_name, customer_document, customer_phone, customer_email, payment_method,
+          notes, status, subtotal, tax, total, created_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
       `,
       [
         invoice.id,
         invoice.customerName,
-        invoice.customerDocument,
-        invoice.customerEmail,
+        invoice.customerDocument || "",
+        invoice.customerPhone || "",
+        invoice.customerEmail || "",
         invoice.paymentMethod,
         invoice.notes,
         invoice.status,

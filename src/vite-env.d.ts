@@ -10,7 +10,8 @@ type InvoiceItem = {
 type InvoiceRecord = {
   id: string;
   customerName: string;
-  customerDocument: string;
+  customerDocument?: string;
+  customerPhone?: string;
   customerEmail?: string;
   paymentMethod?: string;
   notes?: string;
@@ -24,10 +25,8 @@ type InvoiceRecord = {
 
 type CompanyProfile = {
   businessName: string;
-  taxId: string;
   address: string;
   phone: string;
-  email: string;
   logoUrl: string;
   footerMessage: string;
   printerName: string;
@@ -54,6 +53,10 @@ interface Window {
     saveInvoice: (payload: InvoiceRecord) => Promise<InvoiceRecord>;
     deleteInvoice: (invoiceId: string) => Promise<{ ok: boolean }>;
     saveCompanyProfile: (payload: CompanyProfile) => Promise<CompanyProfile>;
+    previewInvoice: (payload: {
+      invoice: InvoiceRecord;
+      companyProfile: CompanyProfile;
+    }) => Promise<PrintResult>;
     printInvoice: (payload: {
       invoice: InvoiceRecord;
       companyProfile: CompanyProfile;

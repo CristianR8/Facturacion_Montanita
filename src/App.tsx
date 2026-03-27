@@ -3,6 +3,7 @@ import { format } from "date-fns";
 import {
   BadgeDollarSign,
   Building2,
+  Eye,
   FileClock,
   Printer,
   ReceiptText,
@@ -15,6 +16,7 @@ const defaultInvoice = (): InvoiceRecord => ({
   id: `INV-${Date.now().toString().slice(-6)}`,
   customerName: "",
   customerDocument: "",
+  customerPhone: "",
   customerEmail: "",
   paymentMethod: "Efectivo",
   notes: "",
@@ -22,34 +24,89 @@ const defaultInvoice = (): InvoiceRecord => ({
   subtotal: 0,
   tax: 0,
   total: 0,
-  items: [
-    { description: "Cafe fresco de montana", quantity: 1, unitPrice: 18000, weightGrams: 500 },
-    { description: "Producto de panaderia", quantity: 2, unitPrice: 6500 }
-  ]
+  items: []
 });
+
+function buildNextInvoiceDraft(previousInvoice?: Partial<InvoiceRecord> | null): InvoiceRecord {
+  return {
+    ...defaultInvoice(),
+    customerName: previousInvoice?.customerName?.trim() || "",
+    customerDocument: previousInvoice?.customerDocument?.trim() || "",
+    customerPhone: previousInvoice?.customerPhone?.trim() || "",
+    customerEmail: previousInvoice?.customerEmail?.trim() || "",
+    paymentMethod: previousInvoice?.paymentMethod?.trim() || "Efectivo"
+  };
+}
 
 const defaultCompanyProfile: CompanyProfile = {
   businessName: "La Montanita",
-  taxId: "NIT 901.555.222-7",
-  address: "Av. de las Flores 145, Bogota",
-  phone: "+57 300 123 4567",
-  email: "facturacion@lamontanita.com",
+  address: "Bucaramanga, Santander",
+  phone: "+57 3152837667",
   logoUrl: "logo.jpg",
   footerMessage: "Gracias por su compra. Regrese pronto.",
-  printerName: "Impresora termica principal",
+  printerName: "POS-80",
   currency: "COP"
 };
+
+const requiredCustomerFields = [
+  { key: "customerName", label: "nombre" }
+] as const;
+
+function formatFieldList(fields: string[]) {
+  if (fields.length === 0) {
+    return "";
+  }
+
+  if (fields.length === 1) {
+    return fields[0];
+  }
+
+  if (fields.length === 2) {
+    return `${fields[0]} y ${fields[1]}`;
+  }
+
+  return `${fields.slice(0, -1).join(", ")} y ${fields[fields.length - 1]}`;
+}
+
+function getMissingCustomerFields(invoice: Pick<InvoiceRecord, "customerName">) {
+  return requiredCustomerFields
+    .filter(({ key }) => String(invoice[key] || "").trim() === "")
+    .map(({ label }) => label);
+}
+
+function normalizePrinterKey(value?: string | null) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/gi, " ")
+    .trim()
+    .toUpperCase();
+}
+
+function normalizePrinterPreference(value?: string | null) {
+  const candidate = String(value || "").trim();
+  const candidateKey = normalizePrinterKey(candidate);
+
+  if (
+    !candidateKey ||
+    candidateKey.startsWith("IMPRESORA LA MONTA") ||
+    candidateKey === "POS 58" ||
+    candidateKey === "POS58"
+  ) {
+    return defaultCompanyProfile.printerName;
+  }
+
+  return candidate;
+}
 
 function normalizeCompanyProfile(profile?: Partial<CompanyProfile> | null): CompanyProfile {
   return {
     businessName: profile?.businessName?.trim() || defaultCompanyProfile.businessName,
-    taxId: profile?.taxId?.trim() || defaultCompanyProfile.taxId,
     address: profile?.address?.trim() || defaultCompanyProfile.address,
     phone: profile?.phone?.trim() || defaultCompanyProfile.phone,
-    email: profile?.email?.trim() || defaultCompanyProfile.email,
     logoUrl: profile?.logoUrl?.trim() || defaultCompanyProfile.logoUrl,
     footerMessage: profile?.footerMessage?.trim() || defaultCompanyProfile.footerMessage,
-    printerName: profile?.printerName?.trim() || defaultCompanyProfile.printerName,
+    printerName: normalizePrinterPreference(profile?.printerName),
     currency: profile?.currency?.trim() || defaultCompanyProfile.currency
   };
 }
@@ -71,6 +128,7 @@ function App() {
   const [lastPrintPreview, setLastPrintPreview] = useState("");
   const [statusMessage, setStatusMessage] = useState("Cargando aplicacion...");
   const [deletingInvoiceId, setDeletingInvoiceId] = useState<string | null>(null);
+  const [printingInvoice, setPrintingInvoice] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -129,6 +187,31 @@ function App() {
     };
   }, [invoice]);
 
+  const missingCustomerFields = useMemo(
+    () => getMissingCustomerFields(invoice),
+    [invoice.customerName]
+  );
+
+  const invoiceIdMissing = invoice.id.trim() === "";
+  const canUseInvoiceActions = !invoiceIdMissing && missingCustomerFields.length === 0;
+  const invoiceRequirementsMessage = useMemo(() => {
+    const pendingFields = [];
+
+    if (invoiceIdMissing) {
+      pendingFields.push("numero de factura");
+    }
+
+    if (missingCustomerFields.length > 0) {
+      pendingFields.push(`datos del cliente (${formatFieldList(missingCustomerFields)})`);
+    }
+
+    if (pendingFields.length === 0) {
+      return "";
+    }
+
+    return `Completa ${formatFieldList(pendingFields)} para habilitar la factura.`;
+  }, [invoiceIdMissing, missingCustomerFields]);
+
   function updateInvoiceField<K extends keyof InvoiceRecord>(field: K, value: InvoiceRecord[K]) {
     setInvoice((current) => ({
       ...current,
@@ -157,19 +240,61 @@ function App() {
   }
 
   function removeItem(index: number) {
-    setInvoice((current) => {
-      if (current.items.length === 1) {
-        return {
-          ...current,
-          items: [{ description: "", quantity: 1, unitPrice: 0 }]
-        };
-      }
+    setInvoice((current) => ({
+      ...current,
+      items: current.items.filter((_, itemIndex) => itemIndex !== index)
+    }));
+  }
 
-      return {
-        ...current,
-        items: current.items.filter((_, itemIndex) => itemIndex !== index)
-      };
-    });
+  function buildInvoicePayload() {
+    const normalizedInvoice = {
+      ...invoice,
+      id: invoice.id.trim(),
+      customerName: invoice.customerName.trim(),
+      customerDocument: (invoice.customerDocument || "").trim(),
+      customerPhone: (invoice.customerPhone || "").trim(),
+      customerEmail: (invoice.customerEmail || "").trim(),
+      paymentMethod: (invoice.paymentMethod || "").trim() || "Efectivo",
+      notes: (invoice.notes || "").trim()
+    };
+    const pendingCustomerFields = getMissingCustomerFields(normalizedInvoice);
+
+    if (!normalizedInvoice.id) {
+      setStatusMessage("Ingresa un numero de factura antes de guardar o imprimir.");
+      return null;
+    }
+
+    if (pendingCustomerFields.length > 0) {
+      setStatusMessage(
+        `Completa todos los datos del cliente: ${formatFieldList(pendingCustomerFields)}.`
+      );
+      return null;
+    }
+
+    const items = computedInvoice.items.filter(
+      (item) => item.description.trim() !== "" && Number(item.quantity) > 0
+    );
+
+    if (items.length === 0) {
+      setStatusMessage("Agrega al menos un producto valido antes de guardar o imprimir.");
+      return null;
+    }
+
+    const subtotal = items.reduce(
+      (sum, item) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0),
+      0
+    );
+    const tax = Math.round(subtotal * 0.19);
+    const total = subtotal + tax;
+
+    return {
+      ...normalizedInvoice,
+      items,
+      status: "Impresa" as const,
+      subtotal,
+      tax,
+      total
+    };
   }
 
   async function saveProfile() {
@@ -185,36 +310,61 @@ function App() {
     }
   }
 
-  async function saveInvoice() {
-    const payload = {
-      ...computedInvoice,
-      status: "Impresa"
-    };
+  async function printAndSaveInvoice() {
+    const payload = buildInvoicePayload();
+
+    if (!payload) {
+      return;
+    }
+
+    setPrintingInvoice(true);
 
     try {
-      const storedInvoice = await window.invoiceApp.saveInvoice(payload);
+      const printResult = await window.invoiceApp.printInvoice({
+        invoice: payload,
+        companyProfile
+      });
 
+      setLastPrintPreview(printResult.preview);
+
+      const storedInvoice = await window.invoiceApp.saveInvoice(payload);
       setSavedInvoices((current) => [
         storedInvoice,
         ...current.filter((item) => item.id !== storedInvoice.id)
       ]);
-      setInvoice(defaultInvoice());
-      setStatusMessage(`La factura ${storedInvoice.id} se guardo como impresa.`);
+      setInvoice(buildNextInvoiceDraft(payload));
+      setStatusMessage(`${printResult.message} Factura ${storedInvoice.id} guardada. Lista para la siguiente.`);
     } catch (error: unknown) {
       setStatusMessage(
-        error instanceof Error ? error.message : "No se pudo guardar la factura en PostgreSQL."
+        error instanceof Error
+          ? `${error.message} Revisa AppData\\Roaming\\lamontanita-invoicer\\main.log.`
+          : "No se pudo imprimir la factura."
       );
+    } finally {
+      setPrintingInvoice(false);
     }
   }
 
   async function handlePrintPreview() {
-    const result = await window.invoiceApp.printInvoice({
-      invoice: { ...computedInvoice, status: "Impresa" },
-      companyProfile
-    });
+    const payload = buildInvoicePayload();
 
-    setLastPrintPreview(result.preview);
-    setStatusMessage(result.message);
+    if (!payload) {
+      return;
+    }
+
+    try {
+      const result = await window.invoiceApp.previewInvoice({
+        invoice: payload,
+        companyProfile
+      });
+
+      setLastPrintPreview(result.preview);
+      setStatusMessage(result.message);
+    } catch (error: unknown) {
+      setStatusMessage(
+        error instanceof Error ? error.message : "No se pudo generar la vista previa."
+      );
+    }
   }
 
   async function deleteInvoice(invoiceId: string) {
@@ -295,6 +445,10 @@ function App() {
           </div>
         </header>
 
+        <div className="rounded-2xl border border-brand-200 bg-white px-4 py-3 text-sm text-stone-700 shadow-soft">
+          {statusMessage}
+        </div>
+
         <div className="grid items-start gap-6 xl:grid-cols-[1.1fr_0.9fr]">
           <section className="grid gap-6">
             <div className="rounded-[28px] border border-brand-200 bg-white p-6 shadow-soft">
@@ -307,6 +461,7 @@ function App() {
               <div className="mt-6 grid gap-4 md:grid-cols-2">
                 <Field
                   label="Numero de factura"
+                  placeholder="Ej. FAC-1001"
                   value={invoice.id}
                   onChange={(value) => updateInvoiceField("id", value)}
                 />
@@ -317,20 +472,35 @@ function App() {
                 />
                 <Field
                   label="Nombre del cliente"
+                  placeholder="Obligatorio"
                   value={invoice.customerName}
                   onChange={(value) => updateInvoiceField("customerName", value)}
                 />
                 <Field
                   label="Documento del cliente"
-                  value={invoice.customerDocument}
+                  placeholder="Opcional"
+                  value={invoice.customerDocument || ""}
                   onChange={(value) => updateInvoiceField("customerDocument", value)}
                 />
                 <Field
+                  label="Telefono del cliente"
+                  placeholder="Opcional"
+                  value={invoice.customerPhone || ""}
+                  onChange={(value) => updateInvoiceField("customerPhone", value)}
+                />
+                <Field
                   label="Correo del cliente"
+                  placeholder="Opcional"
                   value={invoice.customerEmail || ""}
                   onChange={(value) => updateInvoiceField("customerEmail", value)}
                 />
               </div>
+
+              {invoiceRequirementsMessage ? (
+                <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  {invoiceRequirementsMessage}
+                </div>
+              ) : null}
 
               <div className="mt-6 rounded-[24px] border border-brand-100 bg-brand-50/70 p-4">
                 <div className="mb-3 flex items-center justify-between">
@@ -344,51 +514,57 @@ function App() {
                   </button>
                 </div>
                 <div className="space-y-3">
-                  {invoice.items.map((item, index) => (
-                    <div
-                      className="grid gap-3 rounded-2xl border border-brand-100 bg-white p-3 md:grid-cols-[1.6fr_0.55fr_0.75fr_0.75fr_auto]"
-                      key={`${index}-${item.description}`}
-                    >
-                      <Field
-                        label="Descripcion"
-                        value={item.description}
-                        onChange={(value) => updateItem(index, "description", value)}
-                      />
-                      <Field
-                        label="Cant."
-                        type="number"
-                        value={String(item.quantity)}
-                        onChange={(value) => updateItem(index, "quantity", Number(value))}
-                      />
-                      <Field
-                        label="Precio unitario"
-                        type="number"
-                        value={String(item.unitPrice)}
-                        onChange={(value) => updateItem(index, "unitPrice", Number(value))}
-                      />
-                      <Field
-                        label="Peso (g)"
-                        placeholder="Opcional"
-                        type="number"
-                        value={item.weightGrams ? String(item.weightGrams) : ""}
-                        onChange={(value) =>
-                          updateItem(
-                            index,
-                            "weightGrams",
-                            value.trim() === "" ? undefined : Number(value)
-                          )
-                        }
-                      />
-                      <button
-                        className="inline-flex items-center justify-center gap-2 self-end rounded-full border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700 transition hover:bg-red-100"
-                        onClick={() => removeItem(index)}
-                        type="button"
-                      >
-                        <Trash2 size={14} />
-                        Eliminar
-                      </button>
+                  {invoice.items.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-brand-200 bg-white px-4 py-5 text-sm text-stone-500">
+                      No hay productos agregados todavia.
                     </div>
-                  ))}
+                  ) : (
+                    invoice.items.map((item, index) => (
+                      <div
+                        className="grid gap-3 rounded-2xl border border-brand-100 bg-white p-3 md:grid-cols-[1.6fr_0.55fr_0.75fr_0.75fr_auto]"
+                        key={index}
+                      >
+                        <Field
+                          label="Descripcion"
+                          value={item.description}
+                          onChange={(value) => updateItem(index, "description", value)}
+                        />
+                        <Field
+                          label="Cant."
+                          type="number"
+                          value={String(item.quantity)}
+                          onChange={(value) => updateItem(index, "quantity", Number(value))}
+                        />
+                        <Field
+                          label="Precio unitario"
+                          type="number"
+                          value={String(item.unitPrice)}
+                          onChange={(value) => updateItem(index, "unitPrice", Number(value))}
+                        />
+                        <Field
+                          label="Peso (g)"
+                          placeholder="Opcional"
+                          type="number"
+                          value={item.weightGrams ? String(item.weightGrams) : ""}
+                          onChange={(value) =>
+                            updateItem(
+                              index,
+                              "weightGrams",
+                              value.trim() === "" ? undefined : Number(value)
+                            )
+                          }
+                        />
+                        <button
+                          className="inline-flex items-center justify-center gap-2 self-end rounded-full border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700 transition hover:bg-red-100"
+                          onClick={() => removeItem(index)}
+                          type="button"
+                        >
+                          <Trash2 size={14} />
+                          Eliminar
+                        </button>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
 
@@ -399,11 +575,17 @@ function App() {
                   <strong className="text-xl">Total: {money(computedInvoice.total, companyProfile.currency || "COP")}</strong>
                 </div>
                 <div className="flex flex-wrap gap-3">
-                  <ActionButton icon={<Printer size={16} />} onClick={handlePrintPreview} text="Vista previa ticket" />
                   <ActionButton
-                    icon={<ReceiptText size={16} />}
-                    onClick={saveInvoice}
-                    text="Guardar factura"
+                    disabled={!canUseInvoiceActions}
+                    icon={<Eye size={16} />}
+                    onClick={handlePrintPreview}
+                    text="Vista previa ticket"
+                  />
+                  <ActionButton
+                    disabled={printingInvoice || !canUseInvoiceActions}
+                    icon={<Printer size={16} />}
+                    onClick={printAndSaveInvoice}
+                    text={printingInvoice ? "Imprimiendo..." : "Generar factura"}
                   />
                 </div>
               </div>
@@ -426,11 +608,16 @@ function App() {
                       <p className="text-sm text-stone-500">{entry.customerName}</p>
                     </div>
                     <div className="text-sm text-stone-600">
-                      <p>{entry.customerDocument}</p>
+                      {entry.customerDocument ? <p>{entry.customerDocument}</p> : null}
+                      {entry.customerPhone ? <p>{entry.customerPhone}</p> : null}
+                      {entry.customerEmail ? <p className="break-words">{entry.customerEmail}</p> : null}
                       <p>{entry.createdAt ? format(new Date(entry.createdAt), "PPp") : "Fecha pendiente"}</p>
                     </div>
                     <div className="text-sm text-stone-600">
                       <p>{entry.items.length} productos</p>
+                      <p className="break-words">
+                        {entry.items.map((item) => `${item.quantity} x ${item.description}`).join(", ")}
+                      </p>
                       <p>{money(entry.total, companyProfile.currency || "COP")}</p>
                     </div>
                     <div className="self-center rounded-full bg-brand-100 px-3 py-1 text-center text-sm text-brand-800">
@@ -456,7 +643,7 @@ function App() {
               <SectionHeader
                 icon={<Building2 size={18} />}
                 title="Perfil de la empresa"
-                subtitle="Espacio para los datos de tu empresa, informacion fiscal, marca e impresora."
+                subtitle="Espacio para los datos base de tu empresa, marca e impresora."
               />
               <div className="mt-6 grid gap-4">
                 <Field
@@ -465,27 +652,15 @@ function App() {
                   onChange={(value) => setCompanyProfile((current) => ({ ...current, businessName: value }))}
                 />
                 <Field
-                  label="NIT / identificacion fiscal"
-                  value={companyProfile.taxId}
-                  onChange={(value) => setCompanyProfile((current) => ({ ...current, taxId: value }))}
-                />
-                <Field
                   label="Direccion"
                   value={companyProfile.address}
                   onChange={(value) => setCompanyProfile((current) => ({ ...current, address: value }))}
                 />
-                <div className="grid gap-4 md:grid-cols-2">
-                  <Field
-                    label="Telefono"
-                    value={companyProfile.phone}
-                    onChange={(value) => setCompanyProfile((current) => ({ ...current, phone: value }))}
-                  />
-                  <Field
-                    label="Correo"
-                    value={companyProfile.email}
-                    onChange={(value) => setCompanyProfile((current) => ({ ...current, email: value }))}
-                  />
-                </div>
+                <Field
+                  label="Telefono"
+                  value={companyProfile.phone}
+                  onChange={(value) => setCompanyProfile((current) => ({ ...current, phone: value }))}
+                />
                 <div className="grid gap-4 md:grid-cols-2">
                   <Field
                     label="URL del logo"
@@ -572,17 +747,20 @@ function SectionHeader({
 }
 
 function ActionButton({
+  disabled = false,
   icon,
   onClick,
   text
 }: {
+  disabled?: boolean;
   icon: React.ReactNode;
   onClick: () => void;
   text: string;
 }) {
   return (
     <button
-      className="inline-flex items-center gap-2 rounded-full bg-pine px-4 py-2 text-sm text-brand-50 transition hover:bg-[#163327]"
+      className="inline-flex items-center gap-2 rounded-full bg-pine px-4 py-2 text-sm text-brand-50 transition hover:bg-[#163327] disabled:cursor-not-allowed disabled:opacity-60"
+      disabled={disabled}
       onClick={onClick}
       type="button"
     >
@@ -606,10 +784,10 @@ function Field({
   value: string;
 }) {
   return (
-    <label className="grid gap-2">
+    <label className="grid min-w-0 gap-2">
       <span className="text-sm font-medium text-stone-700">{label}</span>
       <input
-        className="rounded-2xl border border-brand-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-200"
+        className="w-full min-w-0 max-w-full rounded-2xl border border-brand-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-200"
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
         type={type}
