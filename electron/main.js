@@ -4,8 +4,10 @@ const { app, BrowserWindow, ipcMain } = require("electron");
 const {
   createInvoice,
   deleteInvoice,
+  deleteProduct,
   getBootstrapData,
-  saveCompanyProfile
+  saveCompanyProfile,
+  saveProduct
 } = require("./database");
 const { printInvoice, getPrintPreview } = require("./printer");
 
@@ -109,6 +111,8 @@ app.whenReady().then(() => {
   ipcMain.handle("app:bootstrap", async () => getBootstrapData());
 
   ipcMain.handle("company:save", async (_event, payload) => saveCompanyProfile(payload));
+  ipcMain.handle("product:save", async (_event, payload) => saveProduct(payload));
+  ipcMain.handle("product:delete", async (_event, productId) => deleteProduct(productId));
 
   ipcMain.handle("invoice:save", async (_event, payload) => createInvoice(payload));
   ipcMain.handle("invoice:delete", async (_event, invoiceId) => deleteInvoice(invoiceId));

@@ -47,6 +47,25 @@ const demoCompanyProfile = {
   currency: "COP"
 };
 
+const defaultProducts = [
+  { description: "Trucha", unitPrice: 25, priceByWeight: true },
+  { description: "Brazo y pierna", unitPrice: 20, priceByWeight: true },
+  { description: "Panceta", unitPrice: 24, priceByWeight: true },
+  { description: "Lomo", unitPrice: 24, priceByWeight: true },
+  { description: "Costilla", unitPrice: 24, priceByWeight: true },
+  { description: "Chicharron", unitPrice: 16, priceByWeight: true },
+  { description: "Bondiola", unitPrice: 20, priceByWeight: true },
+  { description: "Pollo", unitPrice: 18, priceByWeight: true },
+  { description: "Cuajada", unitPrice: 16000, priceByWeight: false },
+  { description: "Yogurth Natural", unitPrice: 13000, priceByWeight: false },
+  { description: "Yogurth Griego", unitPrice: 12000, priceByWeight: false },
+  { description: "Miel", unitPrice: 20000, priceByWeight: false },
+  { description: "Mora", unitPrice: 3500, priceByWeight: false },
+  { description: "Mantequilla", unitPrice: 15000, priceByWeight: false },
+  { description: "Queso Ricotta", unitPrice: 12000, priceByWeight: false },
+  { description: "Huevos", unitPrice: 25000, priceByWeight: false }
+];
+
 let pool;
 
 const configuredThermalPrinterName = "POS-80";
@@ -146,6 +165,17 @@ async function ensureSchema() {
   `);
 
   await currentPool.query(`
+    CREATE TABLE IF NOT EXISTS products (
+      id SERIAL PRIMARY KEY,
+      description TEXT NOT NULL UNIQUE,
+      unit_price NUMERIC(12, 2) NOT NULL,
+      price_by_weight BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await currentPool.query(`
     ALTER TABLE invoice_items
     ADD COLUMN IF NOT EXISTS weight_grams INTEGER;
   `);
@@ -158,6 +188,16 @@ async function ensureSchema() {
   await currentPool.query(`
     ALTER TABLE invoices
     ADD COLUMN IF NOT EXISTS customer_phone TEXT NOT NULL DEFAULT '';
+  `);
+
+  await currentPool.query(`
+    ALTER TABLE products
+    ADD COLUMN IF NOT EXISTS price_by_weight BOOLEAN NOT NULL DEFAULT FALSE;
+  `);
+
+  await currentPool.query(`
+    ALTER TABLE products
+    ADD COLUMN IF NOT EXISTS unit_price NUMERIC(12, 2) NOT NULL DEFAULT 0;
   `);
 
   await currentPool.query(
@@ -216,7 +256,29 @@ async function ensureSchema() {
     [demoCompanyProfile.phone]
   );
 
+  await Promise.all(
+    defaultProducts.map((product) =>
+      currentPool.query(
+        `
+          INSERT INTO products (description, unit_price, price_by_weight, updated_at)
+          VALUES ($1, $2, $3, NOW())
+          ON CONFLICT (description) DO NOTHING;
+        `,
+        [product.description, product.unitPrice, Boolean(product.priceByWeight)]
+      )
+    )
+  );
+
   return { mode: "postgres" };
+}
+
+function mapProductRow(row) {
+  return {
+    id: Number(row.id),
+    description: row.description,
+    unitPrice: Number(row.unit_price),
+    priceByWeight: Boolean(row.price_by_weight)
+  };
 }
 
 function mapInvoiceRow(invoiceRow, items) {
@@ -295,6 +357,15 @@ async function getCompanyProfile() {
   };
 }
 
+async function listProducts() {
+  const currentPool = getPool();
+  const { rows } = await currentPool.query(
+    "SELECT id, description, unit_price, price_by_weight FROM products ORDER BY price_by_weight DESC, description ASC"
+  );
+
+  return rows.map(mapProductRow);
+}
+
 async function saveCompanyProfile(profile) {
   const currentPool = getPool();
 
@@ -331,6 +402,39 @@ async function saveCompanyProfile(profile) {
   );
 
   return getCompanyProfile();
+}
+
+async function saveProduct(product) {
+  const currentPool = getPool();
+  const description = String(product.description || "").trim();
+  const unitPrice = Number(product.unitPrice);
+
+  if (!description) {
+    throw new Error("Ingresa el nombre del producto antes de guardarlo.");
+  }
+
+  if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
+    throw new Error("Ingresa un precio valido para el producto.");
+  }
+
+  try {
+    const { rows } = await currentPool.query(
+      `
+        INSERT INTO products (description, unit_price, price_by_weight, updated_at)
+        VALUES ($1, $2, $3, NOW())
+        RETURNING id, description, unit_price, price_by_weight
+      `,
+      [description, unitPrice, Boolean(product.priceByWeight)]
+    );
+
+    return mapProductRow(rows[0]);
+  } catch (error) {
+    if (error && error.code === "23505") {
+      throw new Error(`El producto "${description}" ya existe en el catalogo.`);
+    }
+
+    throw error;
+  }
 }
 
 function normalizeWeightGrams(value) {
@@ -438,23 +542,42 @@ async function deleteInvoice(invoiceId) {
   }
 }
 
+async function deleteProduct(productId) {
+  const currentPool = getPool();
+  const result = await currentPool.query("DELETE FROM products WHERE id = $1", [productId]);
+
+  if (result.rowCount === 0) {
+    throw new Error(`No se encontro el producto ${productId} para eliminar.`);
+  }
+
+  return { ok: true };
+}
+
 async function getBootstrapData() {
   const schemaStatus = await ensureSchema();
-  const [companyProfile, invoices] = await Promise.all([getCompanyProfile(), listInvoices()]);
+  const [companyProfile, invoices, products] = await Promise.all([
+    getCompanyProfile(),
+    listInvoices(),
+    listProducts()
+  ]);
 
   return {
     mode: schemaStatus.mode,
     companyProfile,
-    invoices
+    invoices,
+    products
   };
 }
 
 module.exports = {
   createInvoice,
   deleteInvoice,
+  deleteProduct,
   ensureSchema,
   getBootstrapData,
   getCompanyProfile,
   listInvoices,
-  saveCompanyProfile
+  listProducts,
+  saveCompanyProfile,
+  saveProduct
 };

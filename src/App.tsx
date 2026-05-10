@@ -48,6 +48,31 @@ const defaultCompanyProfile: CompanyProfile = {
   currency: "COP"
 };
 
+type ProductDraft = {
+  description: string;
+  unitPrice: string;
+  priceByWeight: boolean;
+};
+
+const defaultProductCatalog: ProductPreset[] = [
+  { id: 1, description: "Trucha", unitPrice: 25, priceByWeight: true },
+  { id: 2, description: "Brazo y pierna", unitPrice: 20, priceByWeight: true },
+  { id: 3, description: "Panceta", unitPrice: 24, priceByWeight: true },
+  { id: 4, description: "Lomo", unitPrice: 24, priceByWeight: true },
+  { id: 5, description: "Costilla", unitPrice: 24, priceByWeight: true },
+  { id: 6, description: "Chicharron", unitPrice: 16, priceByWeight: true },
+  { id: 7, description: "Bondiola", unitPrice: 20, priceByWeight: true },
+  { id: 8, description: "Pollo", unitPrice: 18, priceByWeight: true },
+  { id: 9, description: "Cuajada", unitPrice: 16000, priceByWeight: false },
+  { id: 10, description: "Yogurth Natural", unitPrice: 13000, priceByWeight: false },
+  { id: 11, description: "Yogurth Griego", unitPrice: 12000, priceByWeight: false },
+  { id: 12, description: "Miel", unitPrice: 20000, priceByWeight: false },
+  { id: 13, description: "Mora", unitPrice: 3500, priceByWeight: false },
+  { id: 14, description: "Mantequilla", unitPrice: 15000, priceByWeight: false },
+  { id: 15, description: "Queso Ricotta", unitPrice: 12000, priceByWeight: false },
+  { id: 16, description: "Huevos", unitPrice: 25000, priceByWeight: false }
+];
+
 const requiredCustomerFields = [
   { key: "customerName", label: "nombre" }
 ] as const;
@@ -145,12 +170,39 @@ function normalizeInvoiceItem(item: InvoiceItem): InvoiceItem {
   };
 }
 
+function sortProductCatalog(products: ProductPreset[]) {
+  return [...products].sort((left, right) => {
+    if (left.priceByWeight !== right.priceByWeight) {
+      return left.priceByWeight ? -1 : 1;
+    }
+
+    return left.description.localeCompare(right.description, "es", { sensitivity: "base" });
+  });
+}
+
+function getProductPreset(description: string, products: ProductPreset[]) {
+  return products.find((product) => product.description === description);
+}
+
+function createEmptyProductDraft(): ProductDraft {
+  return {
+    description: "",
+    unitPrice: "",
+    priceByWeight: true
+  };
+}
+
 function App() {
   const [mode, setMode] = useState<"demo" | "postgres">("postgres");
   const [loading, setLoading] = useState(true);
   const [invoice, setInvoice] = useState<InvoiceRecord>(defaultInvoice);
   const [savedInvoices, setSavedInvoices] = useState<InvoiceRecord[]>([]);
   const [companyProfile, setCompanyProfile] = useState<CompanyProfile>(defaultCompanyProfile);
+  const [productCatalog, setProductCatalog] = useState<ProductPreset[]>(defaultProductCatalog);
+  const [isProductManagerOpen, setIsProductManagerOpen] = useState(false);
+  const [productDraft, setProductDraft] = useState<ProductDraft>(createEmptyProductDraft);
+  const [savingProduct, setSavingProduct] = useState(false);
+  const [deletingProductId, setDeletingProductId] = useState<number | null>(null);
   const [lastPrintPreview, setLastPrintPreview] = useState("");
   const [statusMessage, setStatusMessage] = useState("Cargando aplicacion...");
   const [deletingInvoiceId, setDeletingInvoiceId] = useState<string | null>(null);
@@ -169,6 +221,9 @@ function App() {
         setMode(payload.mode);
         setCompanyProfile(normalizeCompanyProfile(payload.companyProfile));
         setSavedInvoices(payload.invoices);
+        setProductCatalog(
+          sortProductCatalog(payload.products?.length > 0 ? payload.products : defaultProductCatalog)
+        );
         setStatusMessage(
           payload.mode === "postgres"
             ? "Conectado a PostgreSQL. Tus registros se guardaran en la base de datos."
@@ -185,6 +240,7 @@ function App() {
             ? error.message
             : "No se pudo inicializar PostgreSQL. Revisa la configuracion de la base de datos."
         );
+        setProductCatalog(sortProductCatalog(defaultProductCatalog));
       })
       .finally(() => {
         if (mounted) {
@@ -242,12 +298,66 @@ function App() {
     }));
   }
 
+  function updateProductDraft<K extends keyof ProductDraft>(field: K, value: ProductDraft[K]) {
+    setProductDraft((current) => ({
+      ...current,
+      [field]: value
+    }));
+  }
+
   function updateItem<K extends keyof InvoiceItem>(index: number, key: K, value: InvoiceItem[K]) {
     setInvoice((current) => ({
       ...current,
       items: current.items.map((item, itemIndex) =>
         itemIndex === index ? { ...item, [key]: value } : item
       )
+    }));
+  }
+
+  function updateItemFromProductSelection(index: number, description: string) {
+    const selectedProduct = getProductPreset(description, productCatalog);
+
+    setInvoice((current) => ({
+      ...current,
+      items: current.items.map((item, itemIndex) => {
+        if (itemIndex !== index) {
+          return item;
+        }
+
+        if (!selectedProduct) {
+          return {
+            ...item,
+            description
+          };
+        }
+
+        return {
+          ...item,
+          description: selectedProduct.description,
+          unitPrice: selectedProduct.unitPrice,
+          priceByWeight: selectedProduct.priceByWeight,
+          quantity: selectedProduct.priceByWeight ? 1 : item.quantity || 1,
+          weightGrams: selectedProduct.priceByWeight ? item.weightGrams : undefined
+        };
+      })
+    }));
+  }
+
+  function updateItemPriceMode(index: number, priceByWeight: boolean) {
+    setInvoice((current) => ({
+      ...current,
+      items: current.items.map((item, itemIndex) => {
+        if (itemIndex !== index) {
+          return item;
+        }
+
+        return {
+          ...item,
+          priceByWeight,
+          quantity: priceByWeight ? 1 : item.quantity || 1,
+          weightGrams: priceByWeight ? item.weightGrams : undefined
+        };
+      })
     }));
   }
 
@@ -266,6 +376,75 @@ function App() {
       ...current,
       items: current.items.filter((_, itemIndex) => itemIndex !== index)
     }));
+  }
+
+  async function saveProduct() {
+    const description = productDraft.description.trim();
+    const unitPrice = Number(productDraft.unitPrice);
+    const duplicateProduct = productCatalog.find(
+      (product) => product.description.trim().toLocaleLowerCase() === description.toLocaleLowerCase()
+    );
+
+    if (!description) {
+      setStatusMessage("Ingresa el nombre del producto antes de guardarlo.");
+      return;
+    }
+
+    if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
+      setStatusMessage("Ingresa un precio valido para el producto.");
+      return;
+    }
+
+    if (duplicateProduct) {
+      setStatusMessage(`El producto "${description}" ya existe en el catalogo.`);
+      return;
+    }
+
+    setSavingProduct(true);
+
+    try {
+      const storedProduct = await window.invoiceApp.saveProduct({
+        description,
+        unitPrice,
+        priceByWeight: productDraft.priceByWeight
+      });
+
+      setProductCatalog((current) =>
+        sortProductCatalog([...current.filter((product) => product.id !== storedProduct.id), storedProduct])
+      );
+      setProductDraft(createEmptyProductDraft());
+      setStatusMessage(`Producto "${storedProduct.description}" guardado en el catalogo.`);
+    } catch (error: unknown) {
+      setStatusMessage(
+        error instanceof Error ? error.message : "No se pudo guardar el producto en la base de datos."
+      );
+    } finally {
+      setSavingProduct(false);
+    }
+  }
+
+  async function deleteProduct(product: ProductPreset) {
+    const confirmed = window.confirm(
+      `Se eliminara "${product.description}" del catalogo de productos. Deseas continuar?`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingProductId(product.id);
+
+    try {
+      await window.invoiceApp.deleteProduct(product.id);
+      setProductCatalog((current) => current.filter((item) => item.id !== product.id));
+      setStatusMessage(`Producto "${product.description}" eliminado del catalogo.`);
+    } catch (error: unknown) {
+      setStatusMessage(
+        error instanceof Error ? error.message : "No se pudo eliminar el producto de la base de datos."
+      );
+    } finally {
+      setDeletingProductId(null);
+    }
   }
 
   function buildInvoicePayload() {
@@ -438,6 +617,8 @@ function App() {
   }, [savedInvoices]);
 
   const activeCurrency = companyProfile.currency || "COP";
+  const gramProducts = productCatalog.filter((product) => product.priceByWeight);
+  const unitProducts = productCatalog.filter((product) => !product.priceByWeight);
 
   if (loading) {
     return (
@@ -539,6 +720,103 @@ function App() {
               ) : null}
 
               <div className="mt-6 rounded-[24px] border border-brand-100 bg-brand-50/70 p-4">
+                <div className="mb-4">
+                  <button
+                    className="rounded-full border border-brand-200 bg-white px-4 py-2 text-sm font-medium text-brand-800 transition hover:border-brand-300 hover:bg-brand-50"
+                    onClick={() => setIsProductManagerOpen((current) => !current)}
+                    type="button"
+                  >
+                    {isProductManagerOpen ? "Ocultar gestion de catalogo" : "Agregar o eliminar productos"}
+                  </button>
+                </div>
+
+                {isProductManagerOpen ? (
+                  <div className="mb-4 rounded-[22px] border border-brand-200 bg-white p-4 shadow-[0_12px_35px_rgba(36,82,63,0.06)]">
+                    <div className="flex flex-col gap-1">
+                      <h4 className="font-display text-lg text-brand-900">Catalogo de productos</h4>
+                      <p className="text-sm text-stone-600">
+                        Agrega productos al selector y elige si se calculan por unidad o por gramo.
+                      </p>
+                    </div>
+
+                    <div className="mt-4 grid gap-4 md:grid-cols-2">
+                      <Field
+                        label="Nombre del producto"
+                        placeholder="Ej. Chorizo artesanal"
+                        value={productDraft.description}
+                        onChange={(value) => updateProductDraft("description", value)}
+                      />
+                      <label className="grid min-w-0 gap-2">
+                        <span className="text-sm font-medium text-stone-700">
+                          {productDraft.priceByWeight ? "Precio por gramo" : "Precio por unidad"}
+                        </span>
+                        <input
+                          className="w-full min-w-0 max-w-full rounded-2xl border border-brand-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-200"
+                          min="0"
+                          onChange={(event) => updateProductDraft("unitPrice", event.target.value)}
+                          placeholder={productDraft.priceByWeight ? "Ej. 25" : "Ej. 16000"}
+                          type="number"
+                          value={productDraft.unitPrice}
+                        />
+                      </label>
+                      <label className="grid min-w-0 gap-2">
+                        <span className="text-sm font-medium text-stone-700">Tipo de calculo</span>
+                        <select
+                          className="w-full min-w-0 max-w-full rounded-2xl border border-brand-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-200"
+                          onChange={(event) =>
+                            updateProductDraft("priceByWeight", event.target.value === "weight")
+                          }
+                          value={productDraft.priceByWeight ? "weight" : "unit"}
+                        >
+                          <option value="weight">Por gramo</option>
+                          <option value="unit">Por unidad</option>
+                        </select>
+                      </label>
+                      <div className="flex items-end">
+                        <button
+                          className="w-full rounded-2xl bg-pine px-5 py-3 font-medium text-brand-50 transition hover:bg-[#163327] disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={savingProduct}
+                          onClick={saveProduct}
+                          type="button"
+                        >
+                          {savingProduct ? "Guardando..." : "Guardar producto"}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="mt-5 space-y-3">
+                      {productCatalog.length === 0 ? (
+                        <div className="rounded-2xl border border-dashed border-brand-200 bg-brand-50/60 px-4 py-4 text-sm text-stone-500">
+                          No hay productos guardados en el catalogo.
+                        </div>
+                      ) : (
+                        productCatalog.map((product) => (
+                          <div
+                            className="flex flex-col gap-3 rounded-2xl border border-brand-100 bg-brand-50/50 px-4 py-3 md:flex-row md:items-center md:justify-between"
+                            key={product.id}
+                          >
+                            <div>
+                              <p className="font-medium text-brand-900">{product.description}</p>
+                              <p className="text-sm text-stone-600">
+                                {product.priceByWeight ? "Por gramo" : "Por unidad"} ·{" "}
+                                {money(product.unitPrice, activeCurrency)}
+                              </p>
+                            </div>
+                            <button
+                              className="inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                              disabled={deletingProductId === product.id}
+                              onClick={() => deleteProduct(product)}
+                              type="button"
+                            >
+                              {deletingProductId === product.id ? "Eliminando..." : "Eliminar"}
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                ) : null}
+
                 <div className="mb-3 flex items-center justify-between">
                   <h3 className="font-display text-xl text-brand-800">Productos</h3>
                   <button
@@ -577,19 +855,41 @@ function App() {
                               <label className="sr-only" htmlFor={`item-description-${index}`}>
                                 Descripcion
                               </label>
-                              <input
+                              <select
                                 className="h-11 min-w-0 w-full rounded-2xl border border-brand-200 bg-white px-3 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-200"
                                 id={`item-description-${index}`}
-                                onChange={(event) => updateItem(index, "description", event.target.value)}
-                                placeholder="Nombre del producto"
+                                onChange={(event) =>
+                                  updateItemFromProductSelection(index, event.target.value)
+                                }
                                 value={item.description}
-                              />
+                              >
+                                <option value="">Selecciona un producto</option>
+                                {item.description &&
+                                !productCatalog.some((product) => product.description === item.description) ? (
+                                  <option value={item.description}>{item.description}</option>
+                                ) : null}
+                                <optgroup label="Precio por gramo">
+                                  {gramProducts.map((product) => (
+                                      <option key={product.id} value={product.description}>
+                                        {product.description}
+                                      </option>
+                                    ))}
+                                </optgroup>
+                                <optgroup label="Precio por unidad">
+                                  {unitProducts.map((product) => (
+                                      <option key={product.id} value={product.description}>
+                                        {product.description}
+                                      </option>
+                                    ))}
+                                </optgroup>
+                              </select>
 
                               <label className="sr-only" htmlFor={`item-quantity-${index}`}>
                                 Cantidad
                               </label>
                               <input
                                 className="h-11 min-w-0 w-full rounded-2xl border border-brand-200 bg-white px-3 text-center text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-200"
+                                disabled={Boolean(item.priceByWeight)}
                                 id={`item-quantity-${index}`}
                                 min="0"
                                 onChange={(event) => updateItem(index, "quantity", Number(event.target.value))}
@@ -620,6 +920,7 @@ function App() {
                               </label>
                               <input
                                 className="h-11 min-w-0 w-full rounded-2xl border border-brand-200 bg-white px-3 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-200"
+                                disabled={!item.priceByWeight}
                                 id={`item-weight-${index}`}
                                 min="0"
                                 onChange={(event) =>
@@ -645,7 +946,7 @@ function App() {
                                   checked={Boolean(item.priceByWeight)}
                                   className="h-4 w-4 accent-[#24523f]"
                                   onChange={(event) =>
-                                    updateItem(index, "priceByWeight", event.target.checked)
+                                    updateItemPriceMode(index, event.target.checked)
                                   }
                                   type="checkbox"
                                 />

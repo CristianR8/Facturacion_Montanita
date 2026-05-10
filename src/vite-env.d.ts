@@ -34,10 +34,24 @@ type CompanyProfile = {
   currency: string;
 };
 
+type ProductPreset = {
+  id: number;
+  description: string;
+  unitPrice: number;
+  priceByWeight: boolean;
+};
+
+type ProductPayload = {
+  description: string;
+  unitPrice: number;
+  priceByWeight: boolean;
+};
+
 type BootstrapPayload = {
   mode: "demo" | "postgres";
   companyProfile: CompanyProfile;
   invoices: InvoiceRecord[];
+  products: ProductPreset[];
 };
 
 type PrintResult = {
@@ -54,6 +68,8 @@ interface Window {
     saveInvoice: (payload: InvoiceRecord) => Promise<InvoiceRecord>;
     deleteInvoice: (invoiceId: string) => Promise<{ ok: boolean }>;
     saveCompanyProfile: (payload: CompanyProfile) => Promise<CompanyProfile>;
+    saveProduct: (payload: ProductPayload) => Promise<ProductPreset>;
+    deleteProduct: (productId: number) => Promise<{ ok: boolean }>;
     previewInvoice: (payload: {
       invoice: InvoiceRecord;
       companyProfile: CompanyProfile;
